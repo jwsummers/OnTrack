@@ -23,13 +23,65 @@ const Home = () => {
   const [selectedFood, setSelectedFood] = useState<{ label: string; nutrients: any } | null>(null);
   const [totalWater, setTotalWater] = useState(0);
   const [nutritionalFacts, setNutritionalFacts] = useState({ calories: 0, protein: 0, carbs: 0 });
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [currentDate] = useState(new Date());
 
   // State for goals
   const [goals, setGoals] = useState({ water: 100, calories: 2000, protein: 150, carbs: 300 });
 
-   // Handle goal changes
-   const handleGoalChange = (e: React.ChangeEvent<HTMLInputElement>, type: string) => {
+  // Fetch data from Firestore
+useEffect(() => {
+  const fetchEntries = async () => {
+    const user = auth.currentUser;
+    if (user) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0); // Get start of the day
+
+      // Query for today's intake logs for the current user
+      const q = query(
+        collection(db, 'intakeLogs'),
+        where('userId', '==', user.uid),
+        where('date', '>=', Timestamp.fromDate(todayStart)) // Filter logs for today only
+      );
+
+      try {
+        const querySnapshot = await getDocs(q);
+        const entries = querySnapshot.docs.map((doc) => doc.data());
+
+        // Initialize variables to update state
+        const updatedNutritionalFacts = { calories: 0, protein: 0, carbs: 0 };
+        let updatedTotalWater = 0;
+
+        // Map through entries and process the data
+        const logData = entries
+          .map((entry) => {
+            if (entry.type === 'Food' && entry.nutrition) {
+              updatedNutritionalFacts.calories += entry.nutrition.calories || 0;
+              updatedNutritionalFacts.protein += entry.nutrition.protein || 0;
+              updatedNutritionalFacts.carbs += entry.nutrition.carbs || 0;
+              return { type: 'Food', value: entry.value };
+            } else if (entry.type === 'Water') {
+              updatedTotalWater += parseInt(entry.value, 10);
+              return { type: 'Water', value: entry.value };
+            }
+            return null; // Return null for unsupported entry types
+          })
+          .filter((entry) => entry !== null && typeof entry?.value === 'string'); // Ensure no null values and valid string types
+
+        // Update state with fetched entries
+        setLogEntries(logData as { type: string; value: string }[]); // Cast to correct type
+        setNutritionalFacts(updatedNutritionalFacts);
+        setTotalWater(updatedTotalWater);
+      } catch (error) {
+        console.error('Error fetching entries from Firestore:', error);
+      }
+    }
+  };
+
+  fetchEntries();
+}, [auth.currentUser]);
+
+  // Handle goal changes
+  const handleGoalChange = (e: React.ChangeEvent<HTMLInputElement>, type: string) => {
     setGoals((prevGoals) => ({
       ...prevGoals,
       [type]: parseInt(e.target.value) || 0,
@@ -53,16 +105,16 @@ const Home = () => {
 
   // Fetch food suggestions from the API
   const getFoodSuggestions = async (foodItem: string) => {
-    const apiUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${foodItem}&search_simple=1&action=process&json=1`;
+    const apiUrl = `https://api.edamam.com/api/food-database/v2/parser?ingr=${foodItem}&app_id=${import.meta.env.VITE_EDAMAM_APP_ID}&app_key=${import.meta.env.VITE_EDAMAM_API_KEY}`;
 
     try {
       const response = await fetch(apiUrl);
       const data = await response.json();
 
-      if (data.products && data.products.length > 0) {
-        return data.products.map((product: { product_name: string; nutriments: any }) => ({
-          label: product.product_name,
-          nutrients: product.nutriments,
+      if (data.hints && data.hints.length > 0) {
+        return data.hints.map((hint: { food: { label: any; nutrients: any; }; }) => ({
+          label: hint.food.label,
+          nutrients: hint.food.nutrients,
         }));
       } else {
         return [];
@@ -112,9 +164,9 @@ const Home = () => {
       const { label, nutrients } = selectedFood;
       newEntries.push({ type: 'Food', value: label });
       newNutritionalFacts = {
-        calories: newNutritionalFacts.calories + (nutrients['energy-kcal'] || 0),
-        protein: newNutritionalFacts.protein + (nutrients.proteins || 0),
-        carbs: newNutritionalFacts.carbs + (nutrients.carbohydrates || 0),
+        calories: newNutritionalFacts.calories + (nutrients.ENERC_KCAL || 0),
+        protein: newNutritionalFacts.protein + (nutrients.PROCNT || 0),
+        carbs: newNutritionalFacts.carbs + (nutrients.CHOCDF || 0),
       };
 
       // Store in Firestore
@@ -254,162 +306,160 @@ const Home = () => {
       )}
 
       {/* Main Content */}
-                   <main className="py-8 space-y-8">
-                     <div className="flex flex-col md:flex-row md:space-x-4 space-y-4 md:space-y-0">
-                       {/* Intake Form */}
-                       <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
-                         <h2 className="text-2xl font-semibold text-neon-green mb-4">Add Today's Intake</h2>
-                         <form onSubmit={handleAddIntake} className="flex flex-col space-y-4">
-                           <div>
-                             <label className="block text-neon-green">Food</label>
-                             <input
-                               type="text"
-                               value={food}
-                               onChange={handleFoodInputChange}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                               placeholder="Enter food item"
-                             />
-                             {suggestions.length > 0 && (
-                               <ul className="bg-gray-800 p-2 mt-1 max-h-32 overflow-y-auto rounded">
-                                 {suggestions.map((item, index) => (
-                                   <li
-                                     key={index}
-                                     className="cursor-pointer p-2 hover:bg-gray-700"
-                                     onClick={() => handleFoodSelection(item)}
-                                   >
-                                     {item.label}
-                                   </li>
-                                 ))}
-                               </ul>
-                             )}
-                           </div>
-                           <div>
-                             <label className="block text-neon-green">Water (oz)</label>
-                             <input
-                               type="number"
-                               value={water}
-                               onChange={(e) => setWater(e.target.value)}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                               placeholder="Enter water intake in oz"
-                             />
-                           </div>
-                           <button
-                             type="submit"
-                             className="w-full py-2 mt-4 bg-neon-purple rounded hover:bg-neon-purple-hover"
-                           >
-                             Add Intake
-                           </button>
-                         </form>
-                       </section>
-             
-                       {/* Daily Log */}
-                       <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
-                         <h2 className="text-2xl font-semibold text-neon-green mb-4">Today's Log</h2>
-                         <p className="text-gray-400 mb-4">{currentDate.toDateString()}</p> {/* Display Current Date */}
-                         <div className="space-y-2">
-                           {logEntries.length > 0 ? (
-                             logEntries.map((entry, index) => (
-                               <div key={index} className="p-2 bg-gray-800 rounded">
-                                 <p className="text-neon-purple">
-                                   {entry.type}: {entry.value}
-                                 </p>
-                               </div>
-                             ))
-                           ) : (
-                             <p className="text-neon-purple">No items added yet.</p>
-                           )}
-                         </div>
-                       </section>
-                     </div>
-             
-                     {/* Statistics */}
-                     <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
-                       <h2 className="text-2xl font-semibold text-neon-green mb-4">Statistics</h2>
-             
-                       {/* Goal Inputs */}
-                       <div className="mb-4">
-                         <h3 className="text-xl text-neon-green mb-2">Set Your Daily Goals</h3>
-                         <div className="flex flex-col space-y-2">
-                           <div>
-                             <label className="block text-neon-green">Water Goal (oz):</label>
-                             <input
-                               type="number"
-                               value={goals.water}
-                               onChange={(e) => handleGoalChange(e, 'water')}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                             />
-                           </div>
-                           <div>
-                             <label className="block text-neon-green">Calorie Goal (kcal):</label>
-                             <input
-                               type="number"
-                               value={goals.calories}
-                               onChange={(e) => handleGoalChange(e, 'calories')}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                             />
-                           </div>
-                           <div>
-                             <label className="block text-neon-green">Protein Goal (g):</label>
-                             <input
-                               type="number"
-                               value={goals.protein}
-                               onChange={(e) => handleGoalChange(e, 'protein')}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                             />
-                           </div>
-                           <div>
-                             <label className="block text-neon-green">Carbs Goal (g):</label>
-                             <input
-                               type="number"
-                               value={goals.carbs}
-                               onChange={(e) => handleGoalChange(e, 'carbs')}
-                               className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
-                             />
-                           </div>
-                         </div>
-                       </div>
-             
-                       {/* Progress Bars */}
-                       <div className="mb-4">
-                         <p className="text-neon-green">
-                           Water Intake: {totalWater} oz / {goals.water} oz ({Math.round((totalWater / goals.water) * 100)}%)
-                         </p>
-                         <div className="w-full bg-gray-700 rounded h-4 mt-2">
-                           <div className="bg-neon-green h-4 rounded" style={{ width: `${Math.min((totalWater / goals.water) * 100, 100)}%` }}></div>
-                         </div>
-                       </div>
-             
-                       <div className="mb-4">
-                         <p className="text-neon-green">
-                           Calories: {nutritionalFacts.calories} kcal / {goals.calories} kcal ({Math.round((nutritionalFacts.calories / goals.calories) * 100)}%)
-                         </p>
-                         <div className="w-full bg-gray-700 rounded h-4 mt-2">
-                           <div className="bg-neon-purple h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.calories / goals.calories) * 100, 100)}%` }}></div>
-                         </div>
-                       </div>
-             
-                       <div className="mb-4">
-                         <p className="text-neon-green">
-                           Protein: {nutritionalFacts.protein} g / {goals.protein} g ({Math.round((nutritionalFacts.protein / goals.protein) * 100)}%)
-                         </p>
-                         <div className="w-full bg-gray-700 rounded h-4 mt-2">
-                           <div className="bg-neon-purple-hover h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.protein / goals.protein) * 100, 100)}%` }}></div>
-                         </div>
-                       </div>
-             
-                       <div className="mb-4">
-                         <p className="text-neon-green">
-                           Carbs: {nutritionalFacts.carbs} g / {goals.carbs} g ({Math.round((nutritionalFacts.carbs / goals.carbs) * 100)}%)
-                         </p>
-                         <div className="w-full bg-gray-700 rounded h-4 mt-2">
-                           <div className="bg-neon-deep-purple h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.carbs / goals.carbs) * 100, 100)}%` }}></div>
-                         </div>
-                       </div>
-                     </section>
-                   </main>
-                 </div>
-               );
-             };
-             
-             export default Home;
-             
+      <main className="py-8 space-y-8">
+        <div className="flex flex-col md:flex-row md:space-x-4 space-y-4 md:space-y-0">
+          {/* Intake Form */}
+          <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
+            <h2 className="text-2xl font-semibold text-neon-green mb-4">Add Today's Intake</h2>
+            <form onSubmit={handleAddIntake} className="flex flex-col space-y-4">
+              <div>
+                <label className="block text-neon-green">Food</label>
+                <input
+                  type="text"
+                  value={food}
+                  onChange={handleFoodInputChange}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                  placeholder="Enter food item"
+                />
+                {suggestions.length > 0 && (
+                  <ul className="bg-gray-800 p-2 mt-1 max-h-32 overflow-y-auto rounded">
+                    {suggestions.map((item, index) => (
+                      <li
+                        key={index}
+                        className="cursor-pointer p-2 hover:bg-gray-700"
+                        onClick={() => handleFoodSelection(item)}
+                      >
+                        {item.label}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <label className="block text-neon-green">Water (oz)</label>
+                <input
+                  type="number"
+                  value={water}
+                  onChange={(e) => setWater(e.target.value)}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                  placeholder="Enter water intake in oz"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2 mt-4 bg-neon-purple rounded hover:bg-neon-purple-hover"
+              >
+                Add Intake
+              </button>
+            </form>
+          </section>
+
+          {/* Daily Log */}
+          <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
+            <h2 className="text-2xl font-semibold text-neon-green mb-4">Today's Log</h2>
+            <p className="text-gray-400 mb-4">{currentDate.toDateString()}</p> {/* Display Current Date */}
+            <div className="space-y-2">
+              {logEntries.length > 0 ? (
+                logEntries.map((entry, index) => (
+                  <div key={index} className="p-2 bg-gray-800 rounded">
+                    <p className="text-neon-purple">
+                      {entry.type}: {entry.value}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-neon-purple">No items added yet.</p>
+              )}
+            </div>
+          </section>
+        </div>
+
+        {/* Statistics */}
+        <section className="flex-1 p-4 bg-gray-900 rounded shadow-md">
+          <h2 className="text-2xl font-semibold text-neon-green mb-4">Statistics</h2>
+
+          {/* Progress Bars */}
+          <div className="mb-4">
+            <p className="text-neon-green">
+              Water Intake: {totalWater} oz / {goals.water} oz ({Math.round((totalWater / goals.water) * 100)}%)
+            </p>
+            <div className="w-full bg-gray-700 rounded h-4 mt-2">
+              <div className="bg-neon-green h-4 rounded" style={{ width: `${Math.min((totalWater / goals.water) * 100, 100)}%` }}></div>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <p className="text-neon-green">
+              Calories: {nutritionalFacts.calories} kcal / {goals.calories} kcal ({Math.round((nutritionalFacts.calories / goals.calories) * 100)}%)
+            </p>
+            <div className="w-full bg-gray-700 rounded h-4 mt-2">
+              <div className="bg-neon-purple h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.calories / goals.calories) * 100, 100)}%` }}></div>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <p className="text-neon-green">
+              Protein: {nutritionalFacts.protein} g / {goals.protein} g ({Math.round((nutritionalFacts.protein / goals.protein) * 100)}%)
+            </p>
+            <div className="w-full bg-gray-700 rounded h-4 mt-2">
+              <div className="bg-neon-purple-hover h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.protein / goals.protein) * 100, 100)}%` }}></div>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <p className="text-neon-green">
+              Carbs: {nutritionalFacts.carbs} g / {goals.carbs} g ({Math.round((nutritionalFacts.carbs / goals.carbs) * 100)}%)
+            </p>
+            <div className="w-full bg-gray-700 rounded h-4 mt-2">
+              <div className="bg-neon-deep-purple h-4 rounded" style={{ width: `${Math.min((nutritionalFacts.carbs / goals.carbs) * 100, 100)}%` }}></div>
+            </div>
+          </div>
+          {/* Goal Inputs */}
+          <div className="mb-4">
+            <h3 className="text-xl text-neon-green mb-2">Set Your Daily Goals</h3>
+            <div className="flex flex-col space-y-2">
+              <div>
+                <label className="block text-neon-green">Water Goal (oz):</label>
+                <input
+                  type="number"
+                  value={goals.water}
+                  onChange={(e) => handleGoalChange(e, 'water')}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                />
+              </div>
+              <div>
+                <label className="block text-neon-green">Calorie Goal (kcal):</label>
+                <input
+                  type="number"
+                  value={goals.calories}
+                  onChange={(e) => handleGoalChange(e, 'calories')}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                />
+              </div>
+              <div>
+                <label className="block text-neon-green">Protein Goal (g):</label>
+                <input
+                  type="number"
+                  value={goals.protein}
+                  onChange={(e) => handleGoalChange(e, 'protein')}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                />
+              </div>
+              <div>
+                <label className="block text-neon-green">Carbs Goal (g):</label>
+                <input
+                  type="number"
+                  value={goals.carbs}
+                  onChange={(e) => handleGoalChange(e, 'carbs')}
+                  className="w-full p-2 mt-1 bg-black border border-neon-purple rounded focus:outline-none focus:border-neon-green"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+};
+
+export default Home;
